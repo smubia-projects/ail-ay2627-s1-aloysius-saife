@@ -1,7 +1,8 @@
 import type { GuardConfig, PresetName } from '../../api/types'
 import { DETECTOR } from '../../lib/status'
 
-const NAMES: PresetName[] = ['fast', 'balanced', 'strict']
+// The strict preset needs Anthropic web search, which this showcase does not have.
+const NAMES: PresetName[] = ['fast', 'balanced']
 const BLURB: Record<PresetName, string> = {
   fast: 'Quick check, no repair',
   balanced: 'Default: checks and repairs',
@@ -19,7 +20,7 @@ export function PresetSwitch({ value, presets, onChange }: Props) {
   return (
     <fieldset>
       <legend className="text-sm font-medium text-ink-900">Preset</legend>
-      <div className="mt-1.5 grid grid-cols-3 gap-1 rounded-md border border-ink-200 bg-ink-50 p-1">
+      <div className="mt-1.5 grid grid-cols-2 gap-1 rounded-md border border-ink-200 bg-ink-50 p-1">
         {NAMES.map((n) => (
           <label
             key={n}
