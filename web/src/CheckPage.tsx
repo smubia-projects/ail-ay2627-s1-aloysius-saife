@@ -7,6 +7,7 @@ import { DiffView } from './components/DiffView'
 import { EmptyState } from './components/EmptyState'
 import { EvidenceDrawer } from './components/EvidenceDrawer'
 import { PassTimeline } from './components/PassTimeline'
+import { DemoPausedNotice, RateLimitCTA } from './components/RateLimitCTA'
 import { RunFooter } from './components/RunFooter'
 import { useRun } from './lib/useRun'
 
@@ -21,7 +22,7 @@ interface Props {
 type Selection = { claimId: string; passIndex: number } | null
 
 export function CheckPage({ demo, presets, traps, trapsError, initial }: Props) {
-  const { state, start, reset } = useRun(demo)
+  const { state, start, reset, quota, dismissQuota } = useRun(demo)
   const [selection, setSelection] = useState<Selection>(null)
   const busy = state.phase === 'connecting' || state.phase === 'running'
   const lastPass = Math.max(0, state.passes.length - 1)
@@ -71,6 +72,8 @@ export function CheckPage({ demo, presets, traps, trapsError, initial }: Props) 
       </main>
 
       <EvidenceDrawer state={state} selection={selection} onClose={() => setSelection(null)} />
+      {quota?.kind === 'limit' ? <RateLimitCTA queriesMade={quota.count} onDismiss={dismissQuota} /> : null}
+      {quota?.kind === 'paused' ? <DemoPausedNotice message={quota.message} onDismiss={dismissQuota} /> : null}
     </div>
   )
 }
