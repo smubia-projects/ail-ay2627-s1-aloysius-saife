@@ -23,6 +23,9 @@ VERIFIER = "verifier"
 OPENROUTER = "openrouter"
 PROVIDERS = (ANTHROPIC, VERIFIER, OPENROUTER)
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# AI Lodge deployments read the club's names first (API_BASE_URL / API_KEY / MODEL_NAME) and fall
+# back to the SAIFE_VERIFIER_* names, so both work. The base URL defaults to the club gateway.
+DEFAULT_BASE_URL = "https://api.apiyi.com/v1"
 
 StructuredMode = Literal["json_schema", "json_object", "text"]
 STRUCTURED_MODES: tuple[StructuredMode, ...] = ("json_schema", "json_object", "text")
@@ -149,8 +152,8 @@ class Settings(BaseModel):
     def require_verifier(self) -> tuple[str, str]:
         if not self.verifier_api_key or not self.verifier_base_url:
             raise ConfigError(
-                "Verifier not configured: set SAIFE_VERIFIER_API_KEY and "
-                "SAIFE_VERIFIER_BASE_URL in .env (see .env.example)."
+                "Verifier not configured: set API_KEY (or SAIFE_VERIFIER_API_KEY) and "
+                "API_BASE_URL (or SAIFE_VERIFIER_BASE_URL) in .env (see .env.example)."
             )
         return self.verifier_api_key, self.verifier_base_url
 
@@ -200,7 +203,21 @@ def _role_overrides() -> dict[Role, ModelRef]:
         if not sep or provider not in PROVIDERS or not model:
             raise ConfigError(f"{name} must look like provider:model with provider in {PROVIDERS}")
         out[role] = ModelRef(provider=provider, model=model)
+    # GENERATE_MODEL_NAME: the subject model on the same endpoint, from another lab than the
+    # judges (P3). An explicit SAIFE_ROLE_GENERATE wins.
+    generate = (os.getenv("GENERATE_MODEL_NAME") or "").strip()
+    if generate and Role.GENERATE not in out:
+        out[Role.GENERATE] = ModelRef(provider=VERIFIER, model=generate)
     return out
+
+
+def _env(*names: str) -> str | None:
+    """The first non-empty value among ``names``."""
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return None
 
 
 def load_settings(*, env_file: str | None = ".env", probe_path: Path = PROBE_PATH) -> Settings:
@@ -225,9 +242,9 @@ def load_settings(*, env_file: str | None = ".env", probe_path: Path = PROBE_PAT
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or None,
         openrouter_base_url=os.getenv("OPENROUTER_BASE_URL") or OPENROUTER_BASE_URL,
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
-        verifier_api_key=os.getenv("SAIFE_VERIFIER_API_KEY") or None,
-        verifier_base_url=os.getenv("SAIFE_VERIFIER_BASE_URL") or None,
-        verifier_model=os.getenv("SAIFE_VERIFIER_MODEL") or DEFAULT_VERIFIER_MODEL,
+        verifier_api_key=_env("API_KEY", "SAIFE_VERIFIER_API_KEY"),
+        verifier_base_url=_env("API_BASE_URL", "SAIFE_VERIFIER_BASE_URL") or DEFAULT_BASE_URL,
+        verifier_model=_env("MODEL_NAME", "SAIFE_VERIFIER_MODEL") or DEFAULT_VERIFIER_MODEL,
         verifier_structured_mode=mode,
         routing=routing,
     )
