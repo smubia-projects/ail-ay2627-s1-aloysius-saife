@@ -239,7 +239,7 @@ def load_settings(*, env_file: str | None = ".env", probe_path: Path = PROBE_PAT
         dashboard_url=dashboard_url,
         dashboard_secret=dashboard_secret,
         role_overrides=_role_overrides(),
-        openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or None,
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or os.getenv("API_KEY") or None,
         openrouter_base_url=os.getenv("OPENROUTER_BASE_URL") or OPENROUTER_BASE_URL,
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
         verifier_api_key=_env("API_KEY", "SAIFE_VERIFIER_API_KEY"),
