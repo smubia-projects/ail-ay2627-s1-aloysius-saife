@@ -173,3 +173,43 @@ def test_openrouter_key_is_redacted(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     monkeypatch.setenv("OPENROUTER_API_KEY", key)
     s = load_settings(env_file=None, probe_path=tmp_path / "x.json")
     assert key not in repr(s) and key not in redact(f"auth {key}")
+
+
+def test_club_env_names_win_over_saife_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for name in (
+        "API_KEY",
+        "API_BASE_URL",
+        "MODEL_NAME",
+        "GENERATE_MODEL_NAME",
+        "SAIFE_ROLE_GENERATE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SAIFE_VERIFIER_API_KEY", "sk-old-0123456789abcdef")
+    monkeypatch.setenv("SAIFE_VERIFIER_MODEL", "old-model")
+    s = load_settings(env_file=None, probe_path=tmp_path / "x.json")
+    assert s.verifier_base_url == "https://api.apiyi.com/v1"  # club gateway by default
+    assert s.verifier_model == "old-model" and s.verifier_api_key == "sk-old-0123456789abcdef"
+
+    monkeypatch.setenv("API_KEY", "sk-new-0123456789abcdef")
+    monkeypatch.setenv("API_BASE_URL", "https://gw.example/v1")
+    monkeypatch.setenv("MODEL_NAME", "gemini-3.1-flash-lite")
+    monkeypatch.setenv("GENERATE_MODEL_NAME", "deepseek-v4-flash")
+    s = load_settings(env_file=None, probe_path=tmp_path / "x.json")
+    assert (s.verifier_api_key, s.verifier_base_url) == (
+        "sk-new-0123456789abcdef",
+        "https://gw.example/v1",
+    )
+    roles = s.roles()
+    assert roles[Role.GENERATE].model == "deepseek-v4-flash"
+    assert roles[Role.GROUNDING_JUDGE].model == "gemini-3.1-flash-lite"
+
+
+def test_explicit_role_override_beats_generate_model_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GENERATE_MODEL_NAME", "deepseek-v4-flash")
+    monkeypatch.setenv("SAIFE_ROLE_GENERATE", "verifier:qwen3.6-flash")
+    roles = load_settings(env_file=None, probe_path=tmp_path / "x.json").roles()
+    assert roles[Role.GENERATE].model == "qwen3.6-flash"
