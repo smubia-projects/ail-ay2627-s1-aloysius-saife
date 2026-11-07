@@ -4,6 +4,28 @@ A multi-pass hallucination guard for agentic AI. Every answer is split into atom
 
 > Status: M0–M6 built; 901 offline tests pass; live-checked on the user's own keys. The full benchmark run is still pending. See `.claude/prds/saife.prd.md` (milestones) and `.claude/plans/saife.plan.md`.
 
+## AI Lodge showcase deployment
+
+This fork runs as a public demo on the SMU BIA AI Lodge stack:
+
+- **Deployed:** the FastAPI server (`src/saife/server/`) on Google Cloud Run, built from the
+  `Dockerfile` (only `src/` and the trap questions and benchmark summaries in `bench/` go into the
+  image), and the demo UI (`web/`) on Vercel, which calls the API at `VITE_API_BASE`.
+- **Not deployed (here in the repo):** the CLI, the Python SDK, the benchmark runner and the
+  sAIfe Monitor dashboard (`dashboard/`). Run them on your own keys as described below.
+- **One request per run.** `POST /api/runs/stream` runs the guard inside the request and streams its
+  events (SSE); the last event carries the report. Nothing is stored on the server.
+- **Presets:** `fast` and `balanced`. `strict` needs Claude web search and is not offered in the demo.
+- **Models (club gateway, from env):** `MODEL_NAME=gemini-3.1-flash-lite` judges, splits and
+  repairs; `GENERATE_MODEL_NAME=deepseek-v4-flash` writes answers, so a different lab's model is
+  checked (P3). `SAIFE_VERIFIER_STRUCTURED_MODE=json_object`, because the gateway accepts
+  `json_schema` without enforcing it.
+- **Limits:** each visitor gets a few checks (one per run, `RATE_LIMIT_CHECK_MAX` /
+  `RATE_LIMIT_ASK_MAX`, tuned centrally). After that the API answers 429 and the page shows the
+  AI Lodge invitation; no recorded run is substituted.
+- Endpoints: `GET /api/health`, `POST /api/runs/stream`, `GET /api/presets`, `GET /api/traps`,
+  `GET /api/results`. CORS comes from `CORS_ORIGINS`.
+
 ## Quickstart
 
 sAIfe runs on **your own API keys**. The only required key is for an OpenAI-compatible verifier
@@ -77,7 +99,7 @@ uv run python -m saife bench --set seeded --preset balanced --limit 5
 Server and demo UI:
 
 ```bash
-uv run uvicorn saife.server.app:app --port 8000        # API; also serves web/dist if built
+uv run uvicorn saife.server.app:app --port 8000        # API only (the UI is web/)
 cd web && npm ci && npm run dev                          # http://localhost:5173 (?demo=1 works without the API)
 ```
 
