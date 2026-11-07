@@ -41,7 +41,7 @@ export function App() {
       loadDemoRun().then((run) =>
         setInitial({
           question: run.question,
-          preset: (['fast', 'balanced', 'strict'].includes(run.preset) ? run.preset : 'balanced') as PresetName,
+          preset: (['fast', 'balanced'].includes(run.preset) ? run.preset : 'balanced') as PresetName,
           sources: run.sources.map((s) => ({ id: s.id, text: s.text, title: s.title ?? undefined })),
         }),
       )

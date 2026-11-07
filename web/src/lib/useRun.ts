@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react'
-import { ApiError, api, streamRun } from '../api/client'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { ApiError, streamRun } from '../api/client'
 import type { RunRequest, Source } from '../api/types'
 import { loadDemoRun, replayDemo } from '../demo/replay'
 import { initialRunState, runReducer } from './runState'
 
+/** 429: the showcase limit was reached (CTA). 503: the demo is paused (notice). */
+export type Quota = { kind: 'limit'; count: number } | { kind: 'paused'; message: string } | null
+
 export function useRun(demo: boolean) {
   const [state, dispatch] = useReducer(runReducer, initialRunState)
+  const [quota, setQuota] = useState<Quota>(null)
   const stop = useRef<(() => void) | null>(null)
 
   const cancel = useCallback(() => {
@@ -27,35 +31,23 @@ export function useRun(demo: boolean) {
 
       const sources: Source[] = (req.sources ?? []).map((s) => ({ ...s, title: s.title ?? null, url: null }))
       dispatch({ type: 'connect', sources, question: req.question ?? null, preset: req.preset })
-      let runId: string
-      try {
-        runId = (await api.createRun(req)).run_id
-      } catch (err) {
-        const message =
-          err instanceof ApiError
-            ? `The server rejected the run: ${err.message}`
-            : 'Could not reach the sAIfe server. Start it, or open the demo with ?demo=1.'
-        dispatch({ type: 'error', message })
-        return
-      }
-      let finished = false
-      stop.current = streamRun(runId, {
-        onEvent: (event) => {
-          dispatch({ type: 'event', event })
-          if (event.type === 'run.completed') {
-            finished = true
-            // The completed event normally carries the report; fetch it if it didn't.
-            if (!event.data.report) {
-              api.report(runId).then(
-                (report) => dispatch({ type: 'report', report }),
-                () => dispatch({ type: 'error', message: 'The run finished but its report could not be loaded.' }),
-              )
-            }
+      stop.current = streamRun(req, {
+        onEvent: (event) => dispatch({ type: 'event', event }),
+        onError: (err) => {
+          // The AI step stops here: no recorded or substitute run is shown after a 429/503.
+          if (err instanceof ApiError && err.status === 429) {
+            setQuota({ kind: 'limit', count: err.queriesUsed ?? 0 })
+            dispatch({ type: 'error', message: 'This demo has reached its check limit for now.' })
+          } else if (err instanceof ApiError && err.status === 503) {
+            setQuota({ kind: 'paused', message: err.message })
+            dispatch({ type: 'error', message: 'This demo is paused for now.' })
+          } else if (err instanceof ApiError) {
+            dispatch({ type: 'error', message: `The server rejected the run: ${err.message}` })
+          } else if (err instanceof TypeError) {
+            dispatch({ type: 'error', message: 'Could not reach the sAIfe server. Try again in a moment.' })
+          } else {
+            dispatch({ type: 'error', message: err.message })
           }
-          if (event.type === 'run.failed') finished = true
-        },
-        onError: (message) => {
-          if (!finished) dispatch({ type: 'error', message })
         },
       })
     },
@@ -67,5 +59,7 @@ export function useRun(demo: boolean) {
     dispatch({ type: 'reset' })
   }, [cancel])
 
-  return { state, start, reset }
+  const dismissQuota = useCallback(() => setQuota(null), [])
+
+  return { state, start, reset, quota, dismissQuota }
 }
