@@ -14,6 +14,7 @@ dependencies = [
     "rich>=15.0.0",
     "sse-starlette>=3.5.0",
     "typer>=0.27.2",
+    "upstash-redis>=1.4.0",
     "uvicorn>=0.54.0",
 ]
 
@@ -38,7 +39,8 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = [".claude"]
+# rate_limit_engine.py is vendored byte for byte from the club's shared engine: not linted here.
+extend-exclude = [".claude", "src/saife/server/rate_limit_engine.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
@@ -51,6 +53,7 @@ ignore = ["S101"]  # assert is fine in tests
 python_version = "3.12"
 strict = true
 files = ["src", "scripts"]
+exclude = ['src/saife/server/rate_limit_engine\.py']
 plugins = ["pydantic.mypy"]
 # Windows Application Control blocks the compiled ast_serialize DLL; the Python parser works everywhere.
 native_parser = false
