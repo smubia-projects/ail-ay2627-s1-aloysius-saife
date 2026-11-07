@@ -9,9 +9,9 @@ const PROJECT_CTA = {
   name: 'sAIfe',
   emoji: '🛡️',
   accentColor: '#2563EB',
-  headline: "You've put sAIfe through its paces!",
+  headline: "Every claim got a second opinion!",
   description:
-    'This demo ran {count} checks for you, its limit for now. Each check is several model calls: claims split, judged, resampled and repaired. Want to build AI apps like this one? Join us, or run your own copy from GitHub.',
+    'Want to build AI that fact-checks itself before it speaks? At AI Lodge, students pair up, build AI worth trusting and put it in front of a real audience.',
   programme: 'AI Lodge',
   programmeLink: 'https://www.smubia.com/ailodge',
   githubLink: 'https://github.com/smubia-projects/ail-ay2627-s1-aloysius-saife',
