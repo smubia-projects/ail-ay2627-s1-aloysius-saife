@@ -276,7 +276,7 @@ def test_results_endpoint_lists_summaries_newest_first(tmp_path: Path) -> None:
     outside = tmp_path / "secret.json"
     _write_result(outside, "2099-01-01", "outside")
 
-    app = create_app(lambda p: Guard(p), web_dist=None, results_dir=results)
+    app = create_app(lambda p: Guard(p), results_dir=results)
     client = TestClient(app)
     res = client.get("/api/results")
     assert res.status_code == 200
@@ -287,5 +287,5 @@ def test_results_endpoint_lists_summaries_newest_first(tmp_path: Path) -> None:
 
 
 def test_results_endpoint_missing_dir_is_empty(tmp_path: Path) -> None:
-    app = create_app(lambda p: Guard(p), web_dist=None, results_dir=tmp_path / "none")
+    app = create_app(lambda p: Guard(p), results_dir=tmp_path / "none")
     assert TestClient(app).get("/api/results").json() == []

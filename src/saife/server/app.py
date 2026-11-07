@@ -1,43 +1,47 @@
-"""FastAPI server: start runs, stream their events over SSE, fetch reports (M3).
+"""FastAPI server: run a check and stream its events over SSE in the same request.
 
-``uv run uvicorn saife.server.app:app`` serves the API on :8000 and, if
-``web/dist`` exists, the built demo UI at ``/``.
+``uv run uvicorn saife.server.app:app`` serves the API on :8000. The demo UI is a separate
+Vite app (``web/``); this server answers ``/api/*`` only.
+
+Each run is self-contained: ``POST /api/runs/stream`` runs the guard inside the request and
+streams every event, ending with ``run.completed`` (which carries the report) or
+``run.failed``. Nothing is kept on the server between requests, so any instance can answer
+and scale-to-zero loses nothing.
 """
 
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import logging
+import os
 import time
-import uuid
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from saife.config import PRESETS
+from saife.errors import ConfigError
 from saife.guard import Guard
-from saife.types import Event, Report, Source
+from saife.server.rate_limit import check_rate_limit
+from saife.types import Event, Source
 
 log = logging.getLogger(__name__)
 
 TERMINAL = frozenset({"run.completed", "run.failed"})
 MAX_BODY_BYTES = 1_000_000
-MAX_ACTIVE_RUNS = 8
-MAX_KEPT_RUNS = 200
+MAX_ACTIVE_RUNS = 8  # per instance; more → 423 (busy)
 DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+# The strict preset needs Anthropic web search, which the showcase does not have.
+PUBLIC_PRESETS = ("fast", "balanced")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TRAPS_PATH = REPO_ROOT / "bench" / "datasets" / "traps" / "traps.jsonl"
-WEB_DIST = REPO_ROOT / "web" / "dist"
 RESULTS_DIR = REPO_ROOT / "bench" / "results"
 MAX_RESULT_BYTES = 5_000_000
 
@@ -55,7 +59,7 @@ class RunRequest(BaseModel):
     question: str | None = Field(default=None, max_length=4000)
     answer: str | None = Field(default=None, max_length=40_000)
     sources: list[SourceIn] = Field(default_factory=list, max_length=20)
-    preset: Literal["fast", "balanced", "strict"] = "balanced"
+    preset: Literal["fast", "balanced"] = "balanced"
 
     @model_validator(mode="after")
     def _needs_input(self) -> RunRequest:
@@ -63,43 +67,19 @@ class RunRequest(BaseModel):
             raise ValueError("provide a question, an answer, or both")
         return self
 
-
-@dataclass
-class RunState:
-    run_id: str
-    events: list[Event] = field(default_factory=list)
-    changed: asyncio.Condition = field(default_factory=asyncio.Condition)
-    report: Report | None = None
-    task: asyncio.Task[None] | None = None
-
     @property
-    def done(self) -> bool:
-        return bool(self.events) and self.events[-1].type in TERMINAL
-
-    async def add(self, event: Event) -> None:
-        async with self.changed:
-            self.events.append(event)
-            self.changed.notify_all()
-
-    def _has_more_than(self, n: int) -> bool:
-        return len(self.events) > n
-
-    async def stream(self) -> AsyncIterator[Event]:
-        """All past events, then live ones; ends after the terminal event."""
-        i = 0
-        while True:
-            async with self.changed:
-                await self.changed.wait_for(functools.partial(self._has_more_than, i))
-                batch = self.events[i:]
-            for event in batch:
-                yield event
-                if event.type in TERMINAL:
-                    return
-            i += len(batch)
+    def is_check(self) -> bool:
+        return bool((self.answer or "").strip())
 
 
 def _default_factory(preset: str) -> Guard:
     return Guard(preset)
+
+
+def _cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS", "")
+    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    return origins or DEV_ORIGINS
 
 
 def _load_traps(path: Path) -> list[dict[str, Any]]:
@@ -146,17 +126,16 @@ def create_app(
     guard_factory: GuardFactory = _default_factory,
     *,
     traps_path: Path = TRAPS_PATH,
-    web_dist: Path | None = WEB_DIST,
     results_dir: Path = RESULTS_DIR,
 ) -> FastAPI:
     app = FastAPI(title="sAIfe", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=DEV_ORIGINS,
+        allow_origins=_cors_origins(),
         allow_methods=["GET", "POST"],
         allow_headers=["Content-Type"],
     )
-    runs: dict[str, RunState] = {}
+    active = {"runs": 0}
 
     @app.middleware("http")
     async def limit_body(request: Request, call_next: Callable[[Request], Any]) -> Response:
@@ -166,79 +145,78 @@ def create_app(
         response: Response = await call_next(request)
         return response
 
-    async def execute(state: RunState, req: RunRequest) -> None:
+    async def execute(
+        guard: Guard, req: RunRequest, run_id: str, out: asyncio.Queue[Event]
+    ) -> None:
         sources = [Source(**s.model_dump()) for s in req.sources] or None
+
+        async def sink(event: Event) -> None:
+            await out.put(event)
+
         try:
-            guard = guard_factory(req.preset)
-            if req.answer and req.answer.strip():
-                state.report = await guard.check(
+            if req.is_check:
+                assert req.answer is not None
+                await guard.check(
                     req.answer,
                     sources=sources,
                     question=req.question,
-                    run_id=state.run_id,
-                    extra_sinks=[state.add],
+                    run_id=run_id,
+                    extra_sinks=[sink],
                 )
             else:
                 assert req.question is not None
-                state.report = await guard.run(
-                    req.question, sources=sources, run_id=state.run_id, extra_sinks=[state.add]
-                )
+                await guard.run(req.question, sources=sources, run_id=run_id, extra_sinks=[sink])
         except Exception as exc:  # the stream must still terminate (fail closed)
-            log.exception("run %s failed", state.run_id)
-            if not state.done:
-                seq = state.events[-1].seq + 1 if state.events else 0
-                await state.add(
-                    Event(
-                        type="run.failed",
-                        run_id=state.run_id,
-                        seq=seq,
-                        ts=time.time(),
-                        data={"error": f"{type(exc).__name__}: {exc}"},
-                    )
+            log.exception("run %s failed", run_id)
+            await out.put(
+                Event(
+                    type="run.failed",
+                    run_id=run_id,
+                    seq=10**9,  # after anything already sent; the client only needs order
+                    ts=time.time(),
+                    data={"error": f"{type(exc).__name__}: {exc}"},
                 )
+            )
 
-    def get_state(run_id: str) -> RunState:
-        state = runs.get(run_id)
-        if state is None:
-            raise HTTPException(status_code=404, detail="unknown run")
-        return state
+    @app.get("/api/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
 
-    @app.post("/api/runs", status_code=201)
-    async def create_run(req: RunRequest) -> dict[str, str]:
-        active = sum(1 for s in runs.values() if not s.done)
-        if active >= MAX_ACTIVE_RUNS:
-            raise HTTPException(status_code=429, detail="too many active runs; try again shortly")
-        finished = [rid for rid, s in runs.items() if s.done]  # oldest first (dict order)
-        while len(runs) >= MAX_KEPT_RUNS and finished:
-            del runs[finished.pop(0)]
-        state = RunState(run_id=uuid.uuid4().hex[:12])
-        runs[state.run_id] = state
-        state.task = asyncio.create_task(execute(state, req))
-        return {"run_id": state.run_id}
-
-    @app.get("/api/runs/{run_id}/events")
-    async def run_events(run_id: str) -> EventSourceResponse:
-        state = get_state(run_id)
+    @app.post("/api/runs/stream")
+    async def run_stream(req: RunRequest, request: Request) -> EventSourceResponse:
+        if active["runs"] >= MAX_ACTIVE_RUNS:
+            raise HTTPException(status_code=423, detail="the demo is busy; try again shortly")
+        try:
+            guard = guard_factory(req.preset)
+        except ConfigError as exc:
+            raise HTTPException(status_code=501, detail=f"AI is not configured: {exc}") from exc
+        # One hit per run, right before the model calls start (after validation and config).
+        check_rate_limit(request, "check" if req.is_check else "ask")
+        run_id = os.urandom(6).hex()
+        queue: asyncio.Queue[Event] = asyncio.Queue()
+        active["runs"] += 1
 
         async def gen() -> AsyncIterator[ServerSentEvent]:
-            async for event in state.stream():
-                yield ServerSentEvent(
-                    data=event.model_dump_json(), event=event.type, id=str(event.seq)
-                )
+            task = asyncio.create_task(execute(guard, req, run_id, queue))
+            try:
+                while True:
+                    event = await queue.get()
+                    yield ServerSentEvent(
+                        data=event.model_dump_json(), event=event.type, id=str(event.seq)
+                    )
+                    if event.type in TERMINAL:
+                        return
+            finally:
+                task.cancel()  # client went away: stop spending model calls
+                active["runs"] -= 1
 
         return EventSourceResponse(gen(), ping=15)
-
-    @app.get("/api/runs/{run_id}")
-    async def run_report(run_id: str) -> Report:
-        state = get_state(run_id)
-        if state.report is None:
-            raise HTTPException(status_code=404, detail="report not ready")
-        return state.report
 
     @app.get("/api/presets")
     async def presets() -> dict[str, Any]:
         return {
-            name: cfg.model_dump(mode="json", exclude={"roles"}) for name, cfg in PRESETS.items()
+            name: PRESETS[name].model_dump(mode="json", exclude={"roles"})
+            for name in PUBLIC_PRESETS
         }
 
     @app.get("/api/traps")
@@ -248,9 +226,6 @@ def create_app(
     @app.get("/api/results")
     def results() -> list[dict[str, Any]]:
         return _load_results(results_dir)
-
-    if web_dist is not None and (web_dist / "index.html").exists():
-        app.mount("/", StaticFiles(directory=web_dist, html=True), name="web")
 
     return app
 
