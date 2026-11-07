@@ -1,0 +1,8 @@
+# Only requirements.txt, src/, bench/datasets/traps/ and bench/results/*.json go into the image.
+*
+!requirements.txt
+!src/
+!bench/datasets/traps/
+!bench/results/*.json
+**/__pycache__
+**/*.pyc
