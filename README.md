@@ -17,8 +17,9 @@ This fork runs as a public demo on the SMU BIA AI Lodge stack:
   events (SSE); the last event carries the report. Nothing is stored on the server.
 - **Presets:** `fast` and `balanced`. `strict` needs Claude web search and is not offered in the demo.
 - **Models (club gateway, from env):** `MODEL_NAME=gemini-3.1-flash-lite` judges, splits and
-  repairs; `GENERATE_MODEL_NAME=deepseek-v4-flash` writes answers, so a different lab's model is
-  checked (P3). `SAIFE_VERIFIER_STRUCTURED_MODE=json_object`, because the gateway accepts
+  repairs; `GENERATE_MODEL_NAME=deepseek-v4-1-flash-260910` writes answers, so a different lab's model is
+  checked (P3). The judges stay on Gemini: it is the model the student measured, and moving them to
+  DeepSeek too would put the generator and its checkers in the same lab. `SAIFE_VERIFIER_STRUCTURED_MODE=json_object`, because the gateway accepts
   `json_schema` without enforcing it.
 - **Limits:** each visitor gets a few checks (one per run, `RATE_LIMIT_CHECK_MAX` /
   `RATE_LIMIT_ASK_MAX`, tuned centrally). After that the API answers 429 and the page shows the

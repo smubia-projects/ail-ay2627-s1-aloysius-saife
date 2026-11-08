@@ -152,6 +152,9 @@ class OpenAICompatClient:
         if response_format is not None:
             params["response_format"] = response_format
         extra = {**self._extra_body, **(self._structured_extra_body if response_format else {})}
+        if "deepseek" in model.lower():
+            # DeepSeek (the generator) thinks first by default; calls here have a 30 s timeout.
+            extra.setdefault("reasoning_effort", "none")
         if extra:
             params["extra_body"] = extra
         try:
